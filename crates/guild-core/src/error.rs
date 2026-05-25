@@ -17,4 +17,13 @@ pub enum GuildError {
 
     #[error("crosslink command failed: {0}")]
     Crosslink(String),
+
+    #[error("failed to serialize data: {0}")]
+    SerializeError(String),
+
+    #[error("project with name '{0}' already exists")]
+    DuplicateProject(String),
+
+    #[error("invalid project properties: {0}")]
+    InvalidProjectProperties(String),
 }

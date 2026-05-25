@@ -21,6 +21,11 @@ pub enum GuildError {
     #[error("failed to serialize data: {0}")]
     SerializeError(String),
 
+    #[error("review round {1} for project '{0}' already exists")]
+    DuplicateReviewRound(String, u32),
+
+    #[error("invalid review round: {0}")]
+    InvalidReviewRound(String),
     #[error("checkpoint with ID '{0}' not found")]
     CheckpointNotFound(String),
 }

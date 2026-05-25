@@ -137,6 +137,60 @@ pub struct Progress {
     pub checkpoints: Vec<Checkpoint>,
 }
 
+impl Progress {
+    fn path() -> PathBuf {
+        GuildConfig::guild_dir().join("data").join("progress.toml")
+    }
+
+    /// Load the progress registry from `~/.guild/data/progress.toml`.
+    /// Returns an empty progress structure if the file does not exist.
+    pub fn load() -> Result<Self, GuildError> {
+        let path = Self::path();
+        if !path.exists() {
+            return Ok(Self {
+                checkpoints: Vec::new(),
+            });
+        }
+        let content =
+            fs::read_to_string(&path).map_err(|_| GuildError::DataError { path: path.clone() })?;
+        let progress: Self = toml::from_str(&content)?;
+        Ok(progress)
+    }
+
+    /// Save the progress to `~/.guild/data/progress.toml`.
+    pub fn save(&self) -> Result<(), GuildError> {
+        let path = Self::path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content =
+            toml::to_string(self).map_err(|e| GuildError::SerializeError(e.to_string()))?;
+        fs::write(&path, content)?;
+        Ok(())
+    }
+
+    /// Mark a checkpoint as completed (case-insensitive).
+    /// Returns an error if the checkpoint ID is not found.
+    pub fn complete_checkpoint(&mut self, id: &str) -> Result<(), GuildError> {
+        let id_lower = id.trim().to_lowercase();
+        if let Some(checkpoint) = self
+            .checkpoints
+            .iter_mut()
+            .find(|c| c.id.trim().to_lowercase() == id_lower)
+        {
+            checkpoint.completed = true;
+            Ok(())
+        } else {
+            Err(GuildError::CheckpointNotFound(id.to_string()))
+        }
+    }
+
+    /// Return the first incomplete checkpoint in the curriculum sequence.
+    pub fn next_incomplete(&self) -> Option<&Checkpoint> {
+        self.checkpoints.iter().find(|c| !c.completed)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub id: String,
@@ -148,6 +202,82 @@ pub struct Checkpoint {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewHistory {
     pub reviews: Vec<ReviewRound>,
+}
+
+impl ReviewHistory {
+    fn path() -> PathBuf {
+        GuildConfig::guild_dir().join("data").join("reviews.toml")
+    }
+
+    /// Load the review history from `~/.guild/data/reviews.toml`.
+    /// Returns an empty review history if the file does not exist.
+    pub fn load() -> Result<Self, GuildError> {
+        let path = Self::path();
+        if !path.exists() {
+            return Ok(Self {
+                reviews: Vec::new(),
+            });
+        }
+        let content =
+            fs::read_to_string(&path).map_err(|_| GuildError::DataError { path: path.clone() })?;
+        let history: Self = toml::from_str(&content)?;
+        Ok(history)
+    }
+
+    /// Save the review history to `~/.guild/data/reviews.toml`.
+    pub fn save(&self) -> Result<(), GuildError> {
+        let path = Self::path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content =
+            toml::to_string(self).map_err(|e| GuildError::SerializeError(e.to_string()))?;
+        fs::write(&path, content)?;
+        Ok(())
+    }
+
+    /// Add a review round to the history.
+    /// Returns an error if the round number is 0, the project name is empty,
+    /// or if a round with the same number already exists for the project.
+    pub fn add_round(&mut self, mut round: ReviewRound) -> Result<(), GuildError> {
+        let trimmed_project = round.project.trim().to_string();
+        if trimmed_project.is_empty() {
+            return Err(GuildError::InvalidReviewRound(
+                "project name cannot be empty".to_string(),
+            ));
+        }
+
+        if round.round == 0 {
+            return Err(GuildError::InvalidReviewRound(
+                "review round number must be greater than 0".to_string(),
+            ));
+        }
+
+        let project_lower = trimmed_project.to_lowercase();
+        if self
+            .reviews
+            .iter()
+            .any(|r| r.project.trim().to_lowercase() == project_lower && r.round == round.round)
+        {
+            return Err(GuildError::DuplicateReviewRound(
+                trimmed_project,
+                round.round,
+            ));
+        }
+
+        round.project = trimmed_project;
+        self.reviews.push(round);
+        Ok(())
+    }
+
+    /// Retrieve the latest review round for a project (case-insensitive).
+    pub fn latest_round(&self, project: &str) -> Option<&ReviewRound> {
+        let project_lower = project.trim().to_lowercase();
+        self.reviews
+            .iter()
+            .filter(|r| r.project.trim().to_lowercase() == project_lower)
+            .max_by_key(|r| r.round)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +305,8 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    use tempfile::tempdir;
+
     fn mock_home(dir: &std::path::Path) {
         unsafe {
             std::env::set_var("HOME", dir);
@@ -199,18 +331,36 @@ mod tests {
             path: path.to_string(),
             status: ProjectStatus::NotStarted,
             difficulty: Difficulty::Beginner,
+    fn sample_round(project: &str, round: u32) -> ReviewRound {
+        ReviewRound {
+            project: project.to_string(),
+            round,
+            status: ReviewStatus::Submitted,
+            feedback_ref: None,
+    fn sample_checkpoint(id: &str, title: &str, completed: bool) -> Checkpoint {
+        Checkpoint {
+            id: id.to_string(),
+            title: title.to_string(),
+            completed,
         }
     }
 
     #[test]
     fn test_load_missing_returns_empty_registry() {
         let _guard = ENV_LOCK.lock().unwrap();
+    fn test_load_missing_returns_empty_reviews() {
+    fn test_load_missing_returns_empty_progress() {
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
         let original = std::env::var("HOME").ok();
         let dir = tempdir().unwrap();
         mock_home(dir.path());
 
         let registry = ProjectRegistry::load().unwrap();
         assert!(registry.projects.is_empty());
+        let history = ReviewHistory::load().unwrap();
+        assert!(history.reviews.is_empty());
+        let progress = Progress::load().unwrap();
+        assert!(progress.checkpoints.is_empty());
 
         restore_home(original);
     }
@@ -218,6 +368,7 @@ mod tests {
     #[test]
     fn test_save_and_load_roundtrip() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
         let original = std::env::var("HOME").ok();
         let dir = tempdir().unwrap();
         mock_home(dir.path());
@@ -241,6 +392,32 @@ mod tests {
         let p_b = loaded.find_project("PROJECT-B").unwrap();
         assert_eq!(p_b.name, "Project-B");
         assert_eq!(p_b.path, "./b");
+        let mut history = ReviewHistory::load().unwrap();
+        history.add_round(sample_round("Project-A", 1)).unwrap();
+        history.add_round(sample_round("Project-B", 2)).unwrap();
+        history.save().unwrap();
+
+        let loaded = ReviewHistory::load().unwrap();
+        assert_eq!(loaded.reviews.len(), 2);
+        assert_eq!(loaded.reviews[0].project, "Project-A");
+        assert_eq!(loaded.reviews[0].round, 1);
+        assert_eq!(loaded.reviews[1].project, "Project-B");
+        assert_eq!(loaded.reviews[1].round, 2);
+        let mut progress = Progress::load().unwrap();
+        progress
+            .checkpoints
+            .push(sample_checkpoint("id-1", "Title 1", false));
+        progress
+            .checkpoints
+            .push(sample_checkpoint("id-2", "Title 2", true));
+        progress.save().unwrap();
+
+        let loaded = Progress::load().unwrap();
+        assert_eq!(loaded.checkpoints.len(), 2);
+        assert_eq!(loaded.checkpoints[0].id, "id-1");
+        assert_eq!(loaded.checkpoints[0].title, "Title 1");
+        assert!(!loaded.checkpoints[0].completed);
+        assert!(loaded.checkpoints[1].completed);
 
         restore_home(original);
     }
@@ -336,5 +513,144 @@ mod tests {
         assert!(registry.find_project("  project-a  ").is_some());
         // Non-existent search
         assert!(registry.find_project("Project-B").is_none());
+    fn test_add_round_success_and_trimming() {
+        let mut history = ReviewHistory { reviews: vec![] };
+        history
+            .add_round(sample_round("  my-project  ", 1))
+            .unwrap();
+
+        assert_eq!(history.reviews.len(), 1);
+        assert_eq!(history.reviews[0].project, "my-project");
+    }
+
+    #[test]
+    fn test_add_round_duplicate_fails() {
+        let mut history = ReviewHistory { reviews: vec![] };
+        history.add_round(sample_round("Project-A", 1)).unwrap();
+
+        // Exact match duplicate
+        let res1 = history.add_round(sample_round("Project-A", 1));
+        assert!(res1.is_err());
+        match res1.unwrap_err() {
+            GuildError::DuplicateReviewRound(project, round) => {
+                assert_eq!(project, "Project-A");
+                assert_eq!(round, 1);
+            }
+            other => panic!("expected DuplicateReviewRound, got: {:?}", other),
+        }
+
+        // Case-insensitive duplicate
+        let res2 = history.add_round(sample_round("project-a", 1));
+        assert!(res2.is_err());
+        match res2.unwrap_err() {
+            GuildError::DuplicateReviewRound(project, round) => {
+                assert_eq!(project, "project-a");
+                assert_eq!(round, 1);
+            }
+            other => panic!("expected DuplicateReviewRound, got: {:?}", other),
+        }
+
+        // Different round for same project succeeds
+        history.add_round(sample_round("Project-A", 2)).unwrap();
+        assert_eq!(history.reviews.len(), 2);
+    }
+
+    #[test]
+    fn test_add_round_invalid_properties() {
+        let mut history = ReviewHistory { reviews: vec![] };
+
+        // Empty project name
+        let res_empty = history.add_round(sample_round("   ", 1));
+        assert!(res_empty.is_err());
+        match res_empty.unwrap_err() {
+            GuildError::InvalidReviewRound(msg) => assert!(msg.contains("empty")),
+            other => panic!("expected InvalidReviewRound, got: {:?}", other),
+        }
+
+        // Round = 0
+        let res_zero = history.add_round(sample_round("Project-A", 0));
+        assert!(res_zero.is_err());
+        match res_zero.unwrap_err() {
+            GuildError::InvalidReviewRound(msg) => assert!(msg.contains("greater than 0")),
+            other => panic!("expected InvalidReviewRound, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_latest_round_out_of_order() {
+        let mut history = ReviewHistory { reviews: vec![] };
+
+        // Add rounds out of order
+        history.add_round(sample_round("Project-A", 2)).unwrap();
+        history.add_round(sample_round("Project-A", 1)).unwrap();
+        history.add_round(sample_round("Project-A", 3)).unwrap();
+
+        // Add rounds for another project to ensure filtering works
+        history.add_round(sample_round("Project-B", 5)).unwrap();
+
+        let latest_a = history.latest_round("project-a").unwrap();
+        assert_eq!(latest_a.round, 3);
+
+        let latest_b = history.latest_round("  PROJECT-B  ").unwrap();
+        assert_eq!(latest_b.round, 5);
+
+        assert!(history.latest_round("nonexistent").is_none());
+    fn test_complete_checkpoint_success_case_insensitive() {
+        let mut progress = Progress {
+            checkpoints: vec![
+                sample_checkpoint("checkpoint-1", "Title 1", false),
+                sample_checkpoint("checkpoint-2", "Title 2", false),
+            ],
+        };
+
+        // Exact match
+        progress.complete_checkpoint("checkpoint-1").unwrap();
+        assert!(progress.checkpoints[0].completed);
+
+        // Case-insensitive & trimmed match
+        progress.complete_checkpoint("  CHECKPOINT-2  ").unwrap();
+        assert!(progress.checkpoints[1].completed);
+    }
+
+    #[test]
+    fn test_complete_checkpoint_not_found() {
+        let mut progress = Progress {
+            checkpoints: vec![sample_checkpoint("checkpoint-1", "Title 1", false)],
+        };
+
+        let res = progress.complete_checkpoint("nonexistent");
+        assert!(res.is_err());
+        match res.unwrap_err() {
+            GuildError::CheckpointNotFound(id) => assert_eq!(id, "nonexistent"),
+            other => panic!("expected CheckpointNotFound, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_next_incomplete() {
+        let mut progress = Progress {
+            checkpoints: vec![
+                sample_checkpoint("checkpoint-1", "Title 1", true),
+                sample_checkpoint("checkpoint-2", "Title 2", false),
+                sample_checkpoint("checkpoint-3", "Title 3", false),
+            ],
+        };
+
+        // First incomplete is checkpoint-2
+        let next = progress.next_incomplete().unwrap();
+        assert_eq!(next.id, "checkpoint-2");
+
+        // Complete checkpoint-2
+        progress.complete_checkpoint("checkpoint-2").unwrap();
+
+        // First incomplete is now checkpoint-3
+        let next = progress.next_incomplete().unwrap();
+        assert_eq!(next.id, "checkpoint-3");
+
+        // Complete checkpoint-3
+        progress.complete_checkpoint("checkpoint-3").unwrap();
+
+        // No more incomplete checkpoints
+        assert!(progress.next_incomplete().is_none());
     }
 }

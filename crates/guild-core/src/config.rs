@@ -94,4 +94,77 @@ mod tests {
             other => panic!("expected ConfigParse, got: {:?}", other),
         }
     }
+
+    #[test]
+    fn test_load_from_valid_toml_but_incorrect_schema_returns_parse_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("wrong_schema.toml");
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, "some_unrelated_setting = 42").unwrap();
+
+        let result = GuildConfig::load_from(&path);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            GuildError::ConfigParse(_) => {}
+            other => panic!("expected ConfigParse, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_guild_dir_resolves_with_home_env() {
+        let original_home = std::env::var("HOME").ok();
+
+        unsafe {
+            std::env::set_var("HOME", "/tmp/mock_home");
+        }
+        assert_eq!(
+            GuildConfig::guild_dir(),
+            PathBuf::from("/tmp/mock_home/.guild")
+        );
+        assert_eq!(
+            GuildConfig::default_path(),
+            PathBuf::from("/tmp/mock_home/.guild/config.toml")
+        );
+
+        if let Some(home) = original_home {
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+    }
+
+    #[test]
+    fn test_load_from_default_path() {
+        let original_home = std::env::var("HOME").ok();
+        let dir = tempdir().unwrap();
+        let mock_home = dir.path();
+
+        unsafe {
+            std::env::set_var("HOME", mock_home);
+        }
+
+        let guild_dir = mock_home.join(".guild");
+        std::fs::create_dir_all(&guild_dir).unwrap();
+        let path = guild_dir.join("config.toml");
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, "[user]\nname = \"Bob\"\nhandle = \"bob\"").unwrap();
+
+        let config = GuildConfig::load().unwrap();
+        assert_eq!(config.user.name, "Bob");
+        assert_eq!(config.user.handle, "bob");
+
+        if let Some(home) = original_home {
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+    }
 }

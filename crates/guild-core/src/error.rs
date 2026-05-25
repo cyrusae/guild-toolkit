@@ -21,6 +21,11 @@ pub enum GuildError {
     #[error("failed to serialize data: {0}")]
     SerializeError(String),
 
+    #[error("project with name '{0}' already exists")]
+    DuplicateProject(String),
+
+    #[error("invalid project properties: {0}")]
+    InvalidProjectProperties(String),
     #[error("review round {1} for project '{0}' already exists")]
     DuplicateReviewRound(String, u32),
 

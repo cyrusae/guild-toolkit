@@ -112,6 +112,7 @@ mod tests {
 
     #[test]
     fn test_guild_dir_resolves_with_home_env() {
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
         let original_home = std::env::var("HOME").ok();
 
         unsafe {
@@ -139,6 +140,7 @@ mod tests {
 
     #[test]
     fn test_load_from_default_path() {
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
         let original_home = std::env::var("HOME").ok();
         let dir = tempdir().unwrap();
         let mock_home = dir.path();

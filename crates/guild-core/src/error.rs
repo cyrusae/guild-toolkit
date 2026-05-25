@@ -17,4 +17,10 @@ pub enum GuildError {
 
     #[error("crosslink command failed: {0}")]
     Crosslink(String),
+
+    #[error("failed to serialize data: {0}")]
+    SerializeError(String),
+
+    #[error("checkpoint with ID '{0}' not found")]
+    CheckpointNotFound(String),
 }

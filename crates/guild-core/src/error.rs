@@ -26,4 +26,6 @@ pub enum GuildError {
 
     #[error("invalid review round: {0}")]
     InvalidReviewRound(String),
+    #[error("checkpoint with ID '{0}' not found")]
+    CheckpointNotFound(String),
 }

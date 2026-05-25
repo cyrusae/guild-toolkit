@@ -45,3 +45,53 @@ fn dirs_or_home() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_load_from_valid_config() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, "[user]\nname = \"Alice\"\nhandle = \"alice\"").unwrap();
+
+        let config = GuildConfig::load_from(&path).unwrap();
+        assert_eq!(config.user.name, "Alice");
+        assert_eq!(config.user.handle, "alice");
+    }
+
+    #[test]
+    fn test_load_from_missing_file_returns_config_not_found() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nonexistent.toml");
+
+        let result = GuildConfig::load_from(&path);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            GuildError::ConfigNotFound { path: err_path } => {
+                assert_eq!(err_path, path);
+            }
+            other => panic!("expected ConfigNotFound, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_load_from_invalid_toml_returns_parse_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("invalid.toml");
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, "not valid toml formatting").unwrap();
+
+        let result = GuildConfig::load_from(&path);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            GuildError::ConfigParse(_) => {}
+            other => panic!("expected ConfigParse, got: {:?}", other),
+        }
+    }
+}

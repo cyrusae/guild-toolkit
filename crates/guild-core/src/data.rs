@@ -1,4 +1,6 @@
+use crate::{GuildError, config::GuildConfig};
 use serde::{Deserialize, Serialize};
+use std::{fs, path::PathBuf};
 
 /// Apprentice profile — stored in `~/.guild/data/profile.toml`
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +60,82 @@ pub struct ReviewHistory {
     pub reviews: Vec<ReviewRound>,
 }
 
+impl ReviewHistory {
+    fn path() -> PathBuf {
+        GuildConfig::guild_dir().join("data").join("reviews.toml")
+    }
+
+    /// Load the review history from `~/.guild/data/reviews.toml`.
+    /// Returns an empty review history if the file does not exist.
+    pub fn load() -> Result<Self, GuildError> {
+        let path = Self::path();
+        if !path.exists() {
+            return Ok(Self {
+                reviews: Vec::new(),
+            });
+        }
+        let content =
+            fs::read_to_string(&path).map_err(|_| GuildError::DataError { path: path.clone() })?;
+        let history: Self = toml::from_str(&content)?;
+        Ok(history)
+    }
+
+    /// Save the review history to `~/.guild/data/reviews.toml`.
+    pub fn save(&self) -> Result<(), GuildError> {
+        let path = Self::path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content =
+            toml::to_string(self).map_err(|e| GuildError::SerializeError(e.to_string()))?;
+        fs::write(&path, content)?;
+        Ok(())
+    }
+
+    /// Add a review round to the history.
+    /// Returns an error if the round number is 0, the project name is empty,
+    /// or if a round with the same number already exists for the project.
+    pub fn add_round(&mut self, mut round: ReviewRound) -> Result<(), GuildError> {
+        let trimmed_project = round.project.trim().to_string();
+        if trimmed_project.is_empty() {
+            return Err(GuildError::InvalidReviewRound(
+                "project name cannot be empty".to_string(),
+            ));
+        }
+
+        if round.round == 0 {
+            return Err(GuildError::InvalidReviewRound(
+                "review round number must be greater than 0".to_string(),
+            ));
+        }
+
+        let project_lower = trimmed_project.to_lowercase();
+        if self
+            .reviews
+            .iter()
+            .any(|r| r.project.trim().to_lowercase() == project_lower && r.round == round.round)
+        {
+            return Err(GuildError::DuplicateReviewRound(
+                trimmed_project,
+                round.round,
+            ));
+        }
+
+        round.project = trimmed_project;
+        self.reviews.push(round);
+        Ok(())
+    }
+
+    /// Retrieve the latest review round for a project (case-insensitive).
+    pub fn latest_round(&self, project: &str) -> Option<&ReviewRound> {
+        let project_lower = project.trim().to_lowercase();
+        self.reviews
+            .iter()
+            .filter(|r| r.project.trim().to_lowercase() == project_lower)
+            .max_by_key(|r| r.round)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewRound {
     pub project: String,
@@ -73,4 +151,157 @@ pub enum ReviewStatus {
     InReview,
     Returned,
     Accepted,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn mock_home(dir: &std::path::Path) {
+        unsafe {
+            std::env::set_var("HOME", dir);
+        }
+    }
+
+    fn restore_home(original: Option<String>) {
+        if let Some(home) = original {
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+    }
+
+    fn sample_round(project: &str, round: u32) -> ReviewRound {
+        ReviewRound {
+            project: project.to_string(),
+            round,
+            status: ReviewStatus::Submitted,
+            feedback_ref: None,
+        }
+    }
+
+    #[test]
+    fn test_load_missing_returns_empty_reviews() {
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
+        let original = std::env::var("HOME").ok();
+        let dir = tempdir().unwrap();
+        mock_home(dir.path());
+
+        let history = ReviewHistory::load().unwrap();
+        assert!(history.reviews.is_empty());
+
+        restore_home(original);
+    }
+
+    #[test]
+    fn test_save_and_load_roundtrip() {
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
+        let original = std::env::var("HOME").ok();
+        let dir = tempdir().unwrap();
+        mock_home(dir.path());
+
+        let mut history = ReviewHistory::load().unwrap();
+        history.add_round(sample_round("Project-A", 1)).unwrap();
+        history.add_round(sample_round("Project-B", 2)).unwrap();
+        history.save().unwrap();
+
+        let loaded = ReviewHistory::load().unwrap();
+        assert_eq!(loaded.reviews.len(), 2);
+        assert_eq!(loaded.reviews[0].project, "Project-A");
+        assert_eq!(loaded.reviews[0].round, 1);
+        assert_eq!(loaded.reviews[1].project, "Project-B");
+        assert_eq!(loaded.reviews[1].round, 2);
+
+        restore_home(original);
+    }
+
+    #[test]
+    fn test_add_round_success_and_trimming() {
+        let mut history = ReviewHistory { reviews: vec![] };
+        history
+            .add_round(sample_round("  my-project  ", 1))
+            .unwrap();
+
+        assert_eq!(history.reviews.len(), 1);
+        assert_eq!(history.reviews[0].project, "my-project");
+    }
+
+    #[test]
+    fn test_add_round_duplicate_fails() {
+        let mut history = ReviewHistory { reviews: vec![] };
+        history.add_round(sample_round("Project-A", 1)).unwrap();
+
+        // Exact match duplicate
+        let res1 = history.add_round(sample_round("Project-A", 1));
+        assert!(res1.is_err());
+        match res1.unwrap_err() {
+            GuildError::DuplicateReviewRound(project, round) => {
+                assert_eq!(project, "Project-A");
+                assert_eq!(round, 1);
+            }
+            other => panic!("expected DuplicateReviewRound, got: {:?}", other),
+        }
+
+        // Case-insensitive duplicate
+        let res2 = history.add_round(sample_round("project-a", 1));
+        assert!(res2.is_err());
+        match res2.unwrap_err() {
+            GuildError::DuplicateReviewRound(project, round) => {
+                assert_eq!(project, "project-a");
+                assert_eq!(round, 1);
+            }
+            other => panic!("expected DuplicateReviewRound, got: {:?}", other),
+        }
+
+        // Different round for same project succeeds
+        history.add_round(sample_round("Project-A", 2)).unwrap();
+        assert_eq!(history.reviews.len(), 2);
+    }
+
+    #[test]
+    fn test_add_round_invalid_properties() {
+        let mut history = ReviewHistory { reviews: vec![] };
+
+        // Empty project name
+        let res_empty = history.add_round(sample_round("   ", 1));
+        assert!(res_empty.is_err());
+        match res_empty.unwrap_err() {
+            GuildError::InvalidReviewRound(msg) => assert!(msg.contains("empty")),
+            other => panic!("expected InvalidReviewRound, got: {:?}", other),
+        }
+
+        // Round = 0
+        let res_zero = history.add_round(sample_round("Project-A", 0));
+        assert!(res_zero.is_err());
+        match res_zero.unwrap_err() {
+            GuildError::InvalidReviewRound(msg) => assert!(msg.contains("greater than 0")),
+            other => panic!("expected InvalidReviewRound, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_latest_round_out_of_order() {
+        let mut history = ReviewHistory { reviews: vec![] };
+
+        // Add rounds out of order
+        history.add_round(sample_round("Project-A", 2)).unwrap();
+        history.add_round(sample_round("Project-A", 1)).unwrap();
+        history.add_round(sample_round("Project-A", 3)).unwrap();
+
+        // Add rounds for another project to ensure filtering works
+        history.add_round(sample_round("Project-B", 5)).unwrap();
+
+        let latest_a = history.latest_round("project-a").unwrap();
+        assert_eq!(latest_a.round, 3);
+
+        let latest_b = history.latest_round("  PROJECT-B  ").unwrap();
+        assert_eq!(latest_b.round, 5);
+
+        assert!(history.latest_round("nonexistent").is_none());
+    }
 }

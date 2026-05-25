@@ -36,3 +36,6 @@ target/
 
 # Crosslink cache in subcrates
 crates/**/.crosslink/
+
+# Antigravity CLI session info
+.antigravitycli/

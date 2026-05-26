@@ -39,3 +39,6 @@ crates/**/.crosslink/
 
 # Antigravity CLI session info
 .antigravitycli/
+
+# Generated portfolio preview site
+site/

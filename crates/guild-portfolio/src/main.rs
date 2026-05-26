@@ -1,6 +1,6 @@
 use anyhow::Context;
-use clap::Parser;
-use guild_core::data::{Difficulty, ProjectStatus, ProjectRegistry};
+use clap::{Parser, Subcommand};
+use guild_core::data::{Difficulty, ProjectRegistry, ProjectStatus};
 use pulldown_cmark::{Event, Parser as MarkdownParser, Tag, TagEnd};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,9 +9,24 @@ use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(name = "guild-portfolio", version)]
 struct Cli {
-    /// Output directory for generated site
-    #[arg(short, long, default_value = "./site")]
-    output: String,
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Generate the portfolio site
+    Build {
+        /// Output directory for generated site
+        #[arg(short, long, default_value = "./site")]
+        output: String,
+    },
+    /// Remove generated output
+    Clean {
+        /// Output directory to clean
+        #[arg(short, long, default_value = "./site")]
+        output: String,
+    },
 }
 
 const STYLE_CSS: &str = r#":root {
@@ -474,8 +489,7 @@ fn run_generator(output_dir: &str) -> anyhow::Result<()> {
     };
 
     // 2. Load project registry
-    let registry = ProjectRegistry::load()
-        .context("Failed to load project registry")?;
+    let registry = ProjectRegistry::load().context("Failed to load project registry")?;
 
     // 3. Create output directory
     let output_path = Path::new(output_dir);
@@ -520,7 +534,9 @@ fn run_generator(output_dir: &str) -> anyhow::Result<()> {
             Err(e) => {
                 guild_core::output::warn(&format!(
                     "Skipping project '{}': failed to read '{}': {}",
-                    project.name, readme_path.display(), e
+                    project.name,
+                    readme_path.display(),
+                    e
                 ));
                 continue;
             }
@@ -597,8 +613,12 @@ fn run_generator(output_dir: &str) -> anyhow::Result<()> {
             readme_html = readme_html
         );
 
-        fs::write(&project_file_path, detail_html)
-            .with_context(|| format!("Failed to write project detail page: {}", project_file_path.display()))?;
+        fs::write(&project_file_path, detail_html).with_context(|| {
+            format!(
+                "Failed to write project detail page: {}",
+                project_file_path.display()
+            )
+        })?;
 
         // Format card HTML for index page
         let card_html = format!(
@@ -672,15 +692,38 @@ fn run_generator(output_dir: &str) -> anyhow::Result<()> {
 
     guild_core::output::success(&format!(
         "Successfully generated portfolio for {} projects in '{}'",
-        projects_data.len(), output_dir
+        projects_data.len(),
+        output_dir
     ));
 
     Ok(())
 }
 
+fn run_clean(output_dir: &str) -> anyhow::Result<()> {
+    let path = Path::new(output_dir);
+    if path.exists() {
+        if path.is_dir() {
+            fs::remove_dir_all(path)
+                .with_context(|| format!("Failed to clean output directory: {}", output_dir))?;
+            guild_core::output::success(&format!("Successfully cleaned directory: {}", output_dir));
+        } else {
+            anyhow::bail!("Output path '{}' exists but is not a directory", output_dir);
+        }
+    } else {
+        guild_core::output::info(&format!(
+            "Directory '{}' does not exist, nothing to clean",
+            output_dir
+        ));
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    run_generator(&cli.output)
+    match cli.command {
+        Commands::Build { output } => run_generator(&output),
+        Commands::Clean { output } => run_clean(&output),
+    }
 }
 
 #[cfg(test)]
@@ -698,10 +741,19 @@ mod tests {
             std::env::set_var("HOME", "/users/mockapprentice");
         }
 
-        assert_eq!(resolve_path("~/projects/a"), PathBuf::from("/users/mockapprentice/projects/a"));
+        assert_eq!(
+            resolve_path("~/projects/a"),
+            PathBuf::from("/users/mockapprentice/projects/a")
+        );
         assert_eq!(resolve_path("~"), PathBuf::from("/users/mockapprentice"));
-        assert_eq!(resolve_path("/absolute/path"), PathBuf::from("/absolute/path"));
-        assert_eq!(resolve_path("relative/path"), PathBuf::from("relative/path"));
+        assert_eq!(
+            resolve_path("/absolute/path"),
+            PathBuf::from("/absolute/path")
+        );
+        assert_eq!(
+            resolve_path("relative/path"),
+            PathBuf::from("relative/path")
+        );
 
         if let Some(h) = original_home {
             unsafe {
@@ -723,7 +775,10 @@ mod tests {
 
     #[test]
     fn test_escape_html() {
-        assert_eq!(escape_html("<script>alert('xss')</script>"), "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;");
+        assert_eq!(
+            escape_html("<script>alert('xss')</script>"),
+            "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+        );
         assert_eq!(escape_html("Hello & World"), "Hello &amp; World");
     }
 
@@ -779,8 +834,10 @@ handle = "janedoe"
         // 3. Create mock projects
         let alpha_dir = mock_home.join("project-alpha");
         let beta_dir = mock_home.join("project-beta");
+        let gamma_dir = mock_home.join("project-gamma");
         std::fs::create_dir_all(&alpha_dir).unwrap();
         std::fs::create_dir_all(&beta_dir).unwrap();
+        std::fs::create_dir_all(&gamma_dir).unwrap();
 
         // Write READMEs
         std::fs::write(
@@ -818,9 +875,23 @@ name = "Project Beta"
 path = "{}"
 status = "inprogress"
 difficulty = "intermediate"
+
+[[projects]]
+name = "Project Gamma"
+path = "{}"
+status = "notstarted"
+difficulty = "beginner"
+
+[[projects]]
+name = "Project Delta"
+path = "{}"
+status = "notstarted"
+difficulty = "advanced"
 "#,
             alpha_dir.display(),
-            beta_dir.display()
+            beta_dir.display(),
+            gamma_dir.display(),
+            mock_home.join("project-delta").display()
         );
         std::fs::write(data_dir.join("projects.toml"), projects_toml).unwrap();
 
@@ -833,6 +904,8 @@ difficulty = "intermediate"
         assert!(site_dir.join("style.css").exists());
         assert!(site_dir.join("project-alpha.html").exists());
         assert!(site_dir.join("project-beta.html").exists());
+        assert!(!site_dir.join("project-gamma.html").exists());
+        assert!(!site_dir.join("project-delta.html").exists());
 
         // Verify content in index.html
         let index_content = std::fs::read_to_string(site_dir.join("index.html")).unwrap();
@@ -860,5 +933,26 @@ difficulty = "intermediate"
                 std::env::remove_var("HOME");
             }
         }
+    }
+
+    #[test]
+    fn test_markdown_to_html() {
+        let markdown = "# Title\n\nHello **world** with `code`.";
+        let html = markdown_to_html(markdown);
+        assert!(html.contains("<h1>Title</h1>"));
+        assert!(html.contains("Hello <strong>world</strong> with <code>code</code>."));
+    }
+
+    #[test]
+    fn test_clean_integration() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mock_dir = dir.path().join("my-site");
+        std::fs::create_dir_all(&mock_dir).unwrap();
+        std::fs::write(mock_dir.join("some-file.html"), "content").unwrap();
+
+        assert!(mock_dir.exists());
+        run_clean(&mock_dir.to_string_lossy()).unwrap();
+        assert!(!mock_dir.exists());
     }
 }

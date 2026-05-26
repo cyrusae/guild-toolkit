@@ -305,8 +305,6 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    use tempfile::tempdir;
-
     fn mock_home(dir: &std::path::Path) {
         unsafe {
             std::env::set_var("HOME", dir);
@@ -331,12 +329,18 @@ mod tests {
             path: path.to_string(),
             status: ProjectStatus::NotStarted,
             difficulty: Difficulty::Beginner,
+        }
+    }
+
     fn sample_round(project: &str, round: u32) -> ReviewRound {
         ReviewRound {
             project: project.to_string(),
             round,
             status: ReviewStatus::Submitted,
             feedback_ref: None,
+        }
+    }
+
     fn sample_checkpoint(id: &str, title: &str, completed: bool) -> Checkpoint {
         Checkpoint {
             id: id.to_string(),
@@ -347,10 +351,8 @@ mod tests {
 
     #[test]
     fn test_load_missing_returns_empty_registry() {
-        let _guard = ENV_LOCK.lock().unwrap();
-    fn test_load_missing_returns_empty_reviews() {
-    fn test_load_missing_returns_empty_progress() {
-        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
+        let _guard1 = ENV_LOCK.lock().unwrap();
+        let _guard2 = crate::TEST_ENV_LOCK.lock().unwrap();
         let original = std::env::var("HOME").ok();
         let dir = tempdir().unwrap();
         mock_home(dir.path());
@@ -513,6 +515,9 @@ mod tests {
         assert!(registry.find_project("  project-a  ").is_some());
         // Non-existent search
         assert!(registry.find_project("Project-B").is_none());
+    }
+
+    #[test]
     fn test_add_round_success_and_trimming() {
         let mut history = ReviewHistory { reviews: vec![] };
         history
@@ -595,6 +600,9 @@ mod tests {
         assert_eq!(latest_b.round, 5);
 
         assert!(history.latest_round("nonexistent").is_none());
+    }
+
+    #[test]
     fn test_complete_checkpoint_success_case_insensitive() {
         let mut progress = Progress {
             checkpoints: vec![

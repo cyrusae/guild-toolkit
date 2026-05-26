@@ -14,3 +14,7 @@ path = "src/main.rs"
 guild-core = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
+pulldown-cmark = "0.13.4"
+
+[dev-dependencies]
+tempfile = { workspace = true }

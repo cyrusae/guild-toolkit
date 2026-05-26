@@ -96,9 +96,10 @@ mod tests {
             unsafe {
                 std::env::remove_var("HOME");
             }
+        }
+    }
     use std::fs::File;
     use std::io::Write;
-    use tempfile::tempdir;
 
     #[test]
     fn test_load_from_valid_config() {
@@ -205,6 +206,9 @@ handle = "bob"
         }
 
         restore_home(original);
+    }
+
+    #[test]
     fn test_load_from_invalid_toml_returns_parse_error() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("invalid.toml");
